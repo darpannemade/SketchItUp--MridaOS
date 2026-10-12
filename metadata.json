@@ -1,0 +1,6 @@
+{
+  "name": "MridaOS — Fertilizer Trading & Agri-Retail OS",
+  "description": "Connected operating system for fertilizer trading firms, godown FEFO inventory, PoS/DBT subsidy billing, farmer Khata credit, delivery challans, and Tally Prime voucher sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
