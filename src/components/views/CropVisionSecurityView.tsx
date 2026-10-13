@@ -18,7 +18,7 @@ import {
   Video,
   Zap,
 } from 'lucide-react';
-import { GoogleGenAI } from '@google/genai';
+import { apiFetch } from '../../lib/api';
 
 interface DiagnosticResult {
   diseaseName: string;
@@ -177,32 +177,89 @@ export const CropVisionSecurityView: React.FC = () => {
     },
   ]);
 
+  /**
+   * Converts an image URL (blob or remote) to a base64 string
+   * so it can be sent to the server-side Gemini edge function.
+   */
+  const imageUrlToBase64 = async (url: string): Promise<{ base64: string; mimeType: 'image/jpeg' | 'image/png' | 'image/webp' }> => {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const mimeType = (blob.type || 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp';
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        // Strip the "data:image/...;base64," prefix
+        const base64 = result.split(',')[1];
+        resolve({ base64, mimeType });
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
   const runGeminiAnalysis = async (imageUrl: string, preset?: typeof SAMPLE_PRESETS[0]) => {
     setIsAnalyzing(true);
     setDiagnosticResult(null);
 
     try {
-      // Check for Gemini API key
-      const apiKey = process.env.VITE_GEMINI_API_KEY || (window as any).__GEMINI_API_KEY;
-      if (apiKey) {
-        const ai = new GoogleGenAI({ apiKey });
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: `You are an expert Indian agricultural plant pathologist and entomologist working for MridaOS Agri Retail. Analyze this crop leaf issue for farmers in Maharashtra: ${preset?.crop || 'Crop specimen'}. Provide disease name, confidence score, severity, key symptoms, and in-stock remedy dosage.`,
+      // Convert image to base64 for server-side processing
+      const { base64, mimeType } = await imageUrlToBase64(imageUrl);
+
+      // Build inventory context so the edge function can cross-reference in-stock remedies
+      const inventoryContext = inventory.slice(0, 30).map(item => ({
+        name: item.name,
+        sku: item.sku,
+        inStock: item.stock_qty > 0,
+      }));
+
+      const result = await apiFetch<{
+        diseaseName: string;
+        crop: string;
+        confidence: number;
+        severity: 'Low' | 'Moderate' | 'Severe';
+        symptoms: string[];
+        scientificName: string;
+        recommendedTreatments: {
+          productName: string;
+          inStock: boolean;
+          dosage: string;
+          instructions: string;
+        }[];
+        aiGenerated: true;
+      }>('gemini-vision', {
+        method: 'POST',
+        body: JSON.stringify({
+          imageBase64: base64,
+          mimeType,
+          crop: preset?.crop || 'Unknown crop specimen',
+          inventoryContext,
+        }),
+      });
+
+      if (result.data) {
+        // Map edge function response to the local DiagnosticResult shape
+        setDiagnosticResult({
+          ...result.data,
+          recommendedTreatments: result.data.recommendedTreatments.map(t => ({
+            ...t,
+            batchNumber: undefined,
+            price: 0, // Price fetched separately from inventory if needed
+          })),
         });
-        if (response && response.text) {
-          // Use AI result combined with structured diagnosis
-        }
+        setIsAnalyzing(false);
+        showToast('🌾 Live AI diagnostics complete — Gemini identified crop issue & matched in-stock remedies', 'success');
+        return;
       }
     } catch (err) {
-      console.warn('Gemini live call fallback to local expert model', err);
+      console.warn('Gemini edge function unreachable, falling back to expert model', err);
     }
 
-    // Expert domain model fallback
+    // Fallback: use the curated expert preset diagnosis when the edge function is unavailable
     setTimeout(() => {
       setDiagnosticResult(preset ? preset.diagnosis : SAMPLE_PRESETS[0].diagnosis);
       setIsAnalyzing(false);
-      showToast('🌾 Plant diagnostics completed: AI matched symptoms & in-stock remedies', 'success');
+      showToast('🌾 Plant diagnostics completed using expert model (offline mode)', 'success');
     }, 1200);
   };
 

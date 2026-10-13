@@ -341,7 +341,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const flushOfflineQueue = async () => {
     const res = await offlineSyncService.flushQueue();
     if (res.syncedCount > 0) {
-      showToast(`🔄 Synced ${res.syncedCount} offline record(s) to central database!`, 'success');
+      showToast(`✅ Synced ${res.syncedCount} offline record(s) to central database`, 'success');
+    }
+    if (res.conflictCount > 0) {
+      showToast(
+        `⚠️ ${res.conflictCount} offline sale(s) have stock conflicts — check Alerts for details`,
+        'error'
+      );
+      // Surface conflicts as operational alerts so owner sees them on the dashboard
+      res.conflicts.forEach(c => {
+        addOperationalAlert({
+          severity: 'critical',
+          title: `Offline Sale Conflict: ${c.invoiceNo}`,
+          description: c.reason,
+          category: 'inventory',
+          actionLabel: 'Resolve Conflict',
+          actionType: 'offline_conflict',
+        });
+      });
+    }
+    if (res.failedCount > 0) {
+      showToast(`⚠️ ${res.failedCount} record(s) failed to sync — will retry automatically`, 'error');
     }
   };
 

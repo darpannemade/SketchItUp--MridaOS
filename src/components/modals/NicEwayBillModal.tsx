@@ -12,6 +12,8 @@ import {
   CheckCircle2,
   Building2,
   FileText,
+  ExternalLink,
+  Info,
 } from 'lucide-react';
 import { nicEwayBillService, GeneratedEwayBillResult } from '../../services/nicEwayBillService';
 
@@ -67,6 +69,130 @@ export const NicEwayBillModal: React.FC<NicEwayBillModalProps> = ({ isOpen, onCl
   const handlePrintSlip = () => {
     window.print();
     showToast('Printing official NIC e-Way Bill & Part-B Challan', 'info');
+  };
+
+  /**
+   * Builds the NIC IRP-compliant e-Invoice JSON payload (as per NIC schema v1.1)
+   * and downloads it, then opens the NIC portal for manual submission.
+   * This is the correct flow for businesses without a GSP subscription.
+   */
+  const handleSubmitToNicPortal = () => {
+    if (!ewbResult) return;
+
+    const fromGstin = '27AAECM4821P1Z8';
+    const invoiceDate = new Date(sale.timestamp || Date.now())
+      .toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })
+      .replace(/\//g, '/');
+
+    // NIC IRP v1.1 compliant e-Invoice JSON schema
+    const eInvoicePayload = {
+      Version: '1.1',
+      TranDtls: {
+        TaxSch: 'GST',
+        SupTyp: 'B2B',
+        RegRev: 'N',
+        EcmGstin: null,
+        IgstOnIntra: 'N',
+      },
+      DocDtls: {
+        Typ: 'INV',
+        No: sale.invoiceNo || ewbResult.partA.invoiceNo,
+        Dt: invoiceDate,
+      },
+      SellerDtls: {
+        Gstin: fromGstin,
+        LglNm: 'MridaOS Agri Solutions Pvt Ltd',
+        TrdNm: 'MridaOS',
+        Addr1: 'Plot 42, Central Godown Complex, Ambad MIDC',
+        Loc: 'Nashik',
+        Pin: 422010,
+        Stcd: '27',
+        Ph: '9876543210',
+        Em: 'billing@mridaos.in',
+      },
+      BuyerDtls: {
+        Gstin: sale.customerGstin || 'URP',
+        LglNm: sale.customerName,
+        TrdNm: sale.customerName,
+        Pos: '27',
+        Addr1: sale.deliveryAddress || ewbResult.partA.placeOfDelivery,
+        Loc: ewbResult.partA.placeOfDelivery,
+        Pin: 422209,
+        Stcd: '27',
+        Ph: sale.customerPhone || '',
+        Em: '',
+      },
+      ValDtls: {
+        AssVal: sale.taxableAmount || (sale.grandTotal * 0.95),
+        CgstVal: sale.cgstAmount || 0,
+        SgstVal: sale.sgstAmount || 0,
+        IgstVal: 0,
+        CesVal: 0,
+        StCesVal: 0,
+        Discount: 0,
+        OthChrg: 0,
+        RndOffAmt: 0,
+        TotInvVal: sale.grandTotal || sale.totalAmount,
+      },
+      ItemList: (sale.items || []).map((item: any, idx: number) => ({
+        SlNo: String(idx + 1),
+        PrdDesc: item.name,
+        IsServc: 'N',
+        HsnCd: item.hsn || item.hsnCode || '3102',
+        Barcde: item.sku || '',
+        Qty: item.qty || item.quantity || 1,
+        FreeQty: 0,
+        Unit: 'BAG',
+        UnitPrice: item.price || item.unitPrice || 0,
+        TotAmt: (item.qty || 1) * (item.price || 0),
+        Discount: 0,
+        PreTaxVal: (item.qty || 1) * (item.price || 0),
+        AssAmt: (item.qty || 1) * (item.price || 0),
+        GstRt: item.gstRate || 5,
+        IgstAmt: 0,
+        CgstAmt: ((item.qty || 1) * (item.price || 0) * ((item.gstRate || 5) / 2)) / 100,
+        SgstAmt: ((item.qty || 1) * (item.price || 0) * ((item.gstRate || 5) / 2)) / 100,
+        CesRt: 0,
+        CesAmt: 0,
+        CesNonAdvlAmt: 0,
+        StateCesRt: 0,
+        StateCesAmt: 0,
+        StateCesNonAdvlAmt: 0,
+        OthChrg: 0,
+        TotItemVal: (item.qty || 1) * (item.price || 0),
+        OrdLineRef: String(idx + 1),
+        OrgCntry: 'IN',
+        PrdSlNo: '',
+        BchDtls: { Nm: item.batchNo || item.batchNumber || '' },
+        AttribDtls: [],
+      })),
+      EwbDtls: {
+        TransId: '27AABTN9821R1ZK',
+        TransName: ewbResult.partB.transporterName,
+        Distance: distanceKm,
+        TransDocNo: ewbResult.partB.transporterDocNo,
+        TransDocDt: new Date().toLocaleDateString('en-IN').replace(/\//g, '/'),
+        VehNo: vehicleNo,
+        VehType: 'R',
+        TransMode: '1',
+      },
+    };
+
+    // Download the NIC-compliant JSON
+    const blob = new Blob([JSON.stringify(eInvoicePayload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `NIC_eInvoice_${sale.invoiceNo || 'invoice'}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    showToast('NIC e-Invoice JSON downloaded. Opening NIC IRP portal — upload the JSON file there to get your official IRN.', 'success');
+
+    // Open NIC IRP portal after short delay so download starts first
+    setTimeout(() => {
+      window.open('https://einvoice1.gst.gov.in', '_blank', 'noopener,noreferrer');
+    }, 800);
   };
 
   return (
@@ -147,15 +273,15 @@ export const NicEwayBillModal: React.FC<NicEwayBillModalProps> = ({ isOpen, onCl
                   )}
                   <div className="flex-1 text-xs space-y-1">
                     <div className="text-slate-500 font-bold uppercase text-[10px]">
-                      e-Invoice IRN (Invoice Reference Number):
+                      Internal Invoice Reference Hash:
                     </div>
                     <div className="font-mono text-[10px] text-slate-800 dark:text-slate-200 bg-white/70 dark:bg-black/30 p-1.5 rounded-lg break-all">
                       {ewbResult.irn}
                     </div>
                     <div className="flex items-center gap-3 text-[11px] text-slate-600 dark:text-slate-400 mt-1">
-                      <span>Ack No: <strong className="font-mono">{ewbResult.ackNo}</strong></span>
+                      <span>Internal Ref: <strong className="font-mono">{ewbResult.ackNo}</strong></span>
                       <span>•</span>
-                      <span>Status: <strong className="text-[#079455]">ACTIVE / VERIFIED</strong></span>
+                      <span>Status: <strong className="text-amber-600 dark:text-amber-400">Pending NIC Submission</strong></span>
                     </div>
                   </div>
                 </div>
@@ -191,19 +317,48 @@ export const NicEwayBillModal: React.FC<NicEwayBillModalProps> = ({ isOpen, onCl
                   </div>
                 </div>
               </div>
+              {/* NIC Portal Submission Banner */}
+              <div className="p-3.5 rounded-2xl border border-blue-200 dark:border-blue-900/40 bg-blue-50 dark:bg-blue-950/20 text-xs">
+                <div className="flex items-start gap-2">
+                  <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1.5">
+                    <p className="font-bold text-blue-900 dark:text-blue-200">
+                      To get the official Government IRN, submit to the NIC IRP Portal
+                    </p>
+                    <ol className="list-decimal ml-3 space-y-0.5 text-blue-800 dark:text-blue-300 leading-relaxed">
+                      <li>Click <strong>"Submit to NIC e-Invoice Portal"</strong> below</li>
+                      <li>The NIC-compliant JSON downloads automatically</li>
+                      <li>On the NIC portal, go to <strong>e-Invoice → Bulk Upload</strong></li>
+                      <li>Upload the JSON — the portal returns your official IRN + Signed QR</li>
+                    </ol>
+                    <p className="text-blue-600 dark:text-blue-400 text-[10px]">
+                      Required for B2B transactions above ₹5 crore annual turnover threshold.
+                    </p>
+                  </div>
+                </div>
+              </div>
             </>
           ) : null}
         </div>
 
         {/* Footer */}
         <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5 print:hidden">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* PRIMARY ACTION: Submit to NIC Portal */}
+            <button
+              onClick={handleSubmitToNicPortal}
+              className="px-4 py-2 rounded-xl bg-[#079455] hover:bg-[#057a45] text-white text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Submit to NIC e-Invoice Portal</span>
+            </button>
+
             <button
               onClick={handleDownloadJson}
               className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-700 hover:bg-black text-white text-xs font-bold flex items-center gap-1.5 shadow-2xs cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Download NIC JSON Payload</span>
+              <span>Download e-Way Bill JSON</span>
             </button>
 
             <button

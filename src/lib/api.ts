@@ -19,7 +19,10 @@ import {
   UserRole,
 } from '../types';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://erhabsohsdpusepjplup.supabase.co';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+if (!SUPABASE_URL) {
+  console.error('VITE_SUPABASE_URL is not set. Add it to your .env file.');
+}
 const FUNCTIONS_URL = import.meta.env.DEV
   ? '/functions/v1'
   : `${SUPABASE_URL}/functions/v1`;
@@ -31,7 +34,12 @@ export interface ApiResponse<T> {
 }
 
 /**
- * Base fetch wrapper that attaches the active custom JWT or Supabase JWT
+ * Base fetch wrapper that attaches the active custom JWT or Supabase JWT.
+ *
+ * UX-04 FIX: 401 responses are intercepted globally. Instead of silently
+ * failing (which made billing appear to hang after session expiry), this now
+ * fires a 'mridaos:session-expired' event that AppContext listens to and
+ * shows a re-login modal.
  */
 export async function apiFetch<T>(
   endpoint: string,
@@ -50,23 +58,38 @@ export async function apiFetch<T>(
       ...(options.headers as Record<string, string> || {}),
     };
 
-    // If local dev or endpoint path resolution
     const url = endpoint.startsWith('http') ? endpoint : `${FUNCTIONS_URL}/${endpoint.replace(/^\//, '')}`;
 
-    const response = await fetch(url, {
-      ...options,
-      headers,
-    });
-
+    const response = await fetch(url, { ...options, headers });
     const json = await response.json().catch(() => null);
+
+    // UX-04 FIX: Intercept 401 — surface session expiry to the user
+    if (response.status === 401) {
+      // Attempt a silent refresh first before giving up
+      const sessionId = localStorage.getItem('mridaos_session_id');
+      if (sessionId) {
+        const refreshResult = await attemptTokenRefresh(sessionId);
+        if (refreshResult) {
+          // Retry the original request with the new token
+          const retryHeaders = { ...headers, Authorization: `Bearer ${refreshResult}` };
+          const retryResponse = await fetch(url, { ...options, headers: retryHeaders });
+          const retryJson = await retryResponse.json().catch(() => null);
+          if (retryResponse.ok && !(retryJson?.error)) {
+            return { data: retryJson?.data !== undefined ? retryJson.data : retryJson, error: null, meta: retryJson?.meta || null };
+          }
+        }
+      }
+      // Refresh failed — dispatch session expired event for UI to handle
+      window.dispatchEvent(new CustomEvent('mridaos:session-expired', {
+        detail: { message: 'Your session has expired. Please log in again to continue.' }
+      }));
+      return { data: null, error: { code: 'SESSION_EXPIRED', message: 'Session expired. Please log in again.' }, meta: null };
+    }
 
     if (!response.ok || (json && json.error)) {
       return {
         data: null,
-        error: json?.error || {
-          code: `HTTP_${response.status}`,
-          message: response.statusText || 'Request failed',
-        },
+        error: json?.error || { code: `HTTP_${response.status}`, message: response.statusText || 'Request failed' },
         meta: null,
       };
     }
@@ -79,14 +102,56 @@ export async function apiFetch<T>(
   } catch (err: any) {
     return {
       data: null,
-      error: {
-        code: 'NETWORK_ERROR',
-        message: err?.message || 'Failed to connect to API server',
-      },
+      error: { code: 'NETWORK_ERROR', message: err?.message || 'Failed to connect to API server' },
       meta: null,
     };
   }
 }
+
+/**
+ * AUTH-03 FIX: Attempt a silent JWT refresh using the stored sessionId.
+ * Returns the new token string if successful, null if not.
+ */
+async function attemptTokenRefresh(sessionId: string): Promise<string | null> {
+  try {
+    const url = `${FUNCTIONS_URL}/auth/refresh`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+    const json = await response.json().catch(() => null);
+    if (response.ok && json?.data?.token) {
+      localStorage.setItem('mridaos_jwt_token', json.data.token);
+      return json.data.token;
+    }
+  } catch {
+    // Silent failure — caller handles the null
+  }
+  return null;
+}
+
+/**
+ * AUTH-03 FIX: Start a background interval that refreshes the JWT every
+ * 12 minutes (before the 15-minute expiry). Call this after login.
+ * Returns the interval ID so it can be cleared on logout.
+ */
+export function startSilentRefresh(): ReturnType<typeof setInterval> {
+  const REFRESH_INTERVAL_MS = 12 * 60 * 1000; // 12 minutes
+  return setInterval(async () => {
+    const sessionId = localStorage.getItem('mridaos_session_id');
+    const token = localStorage.getItem('mridaos_jwt_token');
+    if (!sessionId || !token) return;
+    const newToken = await attemptTokenRefresh(sessionId);
+    if (!newToken) {
+      // Token refresh failed — notify UI
+      window.dispatchEvent(new CustomEvent('mridaos:session-expired', {
+        detail: { message: 'Your session has expired. Please log in again.' }
+      }));
+    }
+  }, REFRESH_INTERVAL_MS);
+}
+
 
 // ==============================================================================
 // 1. MASTER DATA API

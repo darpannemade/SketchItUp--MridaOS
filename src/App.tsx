@@ -18,8 +18,10 @@ import { DedicatedViews } from './components/views/DedicatedViews';
 import { NotFoundView } from './components/views/NotFoundView';
 import { ResetPasswordView } from './components/views/ResetPasswordView';
 import { LoginPage } from './components/auth/LoginPage';
-import { useLenis } from './hooks/useLenis';
+// PERF-04 FIX: Lenis removed — smooth scroll library is inappropriate for a billing terminal
+// import { useLenis } from './hooks/useLenis';
 import { SearchPalette } from './components/SearchPalette';
+import { ErrorBoundary } from './components/ErrorBoundary'; // UX-02 FIX
 
 // Interactive Modals
 import { NewSaleModal } from './components/modals/NewSaleModal';
@@ -53,7 +55,8 @@ const MainLayout: React.FC = () => {
     selectedSaleForEwayBill,
     setVoiceBillData,
   } = useApp();
-  const { containerRef, contentRef } = useLenis(activeView);
+  // PERF-04 FIX: useLenis removed — no smooth scroll on billing terminal
+  // const { containerRef, contentRef } = useLenis(activeView);
 
   // Global Spotlight Search Shortcut (Cmd+K / Ctrl+K)
   React.useEffect(() => {
@@ -103,44 +106,58 @@ const MainLayout: React.FC = () => {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#F6F8F6] dark:bg-[#1A1F1A] text-[#1A1A1A] dark:text-[#E8F0E8] font-sans antialiased selection:bg-[#079455]/20 selection:text-[#079455] transition-colors duration-200">
       {/* Top Header Bar */}
-      <TopBar />
+      <ErrorBoundary section="Top Bar">
+        <TopBar />
+      </ErrorBoundary>
 
       {/* App Body (Sidebar on left, Main Content on right) */}
       <div className="flex flex-1 min-h-0 w-full overflow-hidden">
         {/* Sidebar Navigation */}
-        <Sidebar />
+        <ErrorBoundary section="Navigation">
+          <Sidebar />
+        </ErrorBoundary>
 
-        {/* Scrollable Dashboard Viewport with Lenis Smooth Scrolling */}
+        {/* Scrollable Dashboard Viewport */}
         <main
-          ref={containerRef}
           className="flex-1 overflow-y-auto px-3.5 sm:px-6 py-4 sm:py-5 custom-scrollbar"
+          aria-label="Main content area"
         >
-          <div ref={contentRef} className="max-w-[1600px] mx-auto flex flex-col gap-4 sm:gap-5 pb-12">
+          <div className="max-w-[1600px] mx-auto flex flex-col gap-4 sm:gap-5 pb-12">
             {isCommandCenter ? (
               <>
-                {/* 1. Top KPI Row (Weather, Today's Sales, Khata Risk, Buffer Stock, Procurement, Nursery Vigor) */}
-                <MetricCards />
+                {/* UX-02 FIX: Each section wrapped in ErrorBoundary — one section crash can't bring down the whole app */}
+                <ErrorBoundary section="Dashboard Metrics">
+                  <MetricCards />
+                </ErrorBoundary>
 
-                {/* 2. Sales Analytics & Subsidized PoS Stream */}
-                <SalesAnalytics />
+                <ErrorBoundary section="Sales Analytics">
+                  <SalesAnalytics />
+                </ErrorBoundary>
 
-                {/* 3. Multi-Godown & FEFO Batch Inventory Control */}
-                <InventoryIntelligence />
+                <ErrorBoundary section="Inventory Intelligence">
+                  <InventoryIntelligence />
+                </ErrorBoundary>
 
-                {/* 4. Farmer Khata Credit & Sub-Dealer Receivables */}
-                <KhataLedger />
+                <ErrorBoundary section="Khata Ledger">
+                  <KhataLedger />
+                </ErrorBoundary>
 
-                {/* 5. Supplier POs, Approvals & GRN Inwarding */}
-                <ProcurementSection />
+                <ErrorBoundary section="Procurement">
+                  <ProcurementSection />
+                </ErrorBoundary>
 
-                {/* 6. Statutory FCO Stock Register & PoS/DBT Compliance */}
-                <ComplianceAndActivity />
+                <ErrorBoundary section="Compliance & Activity">
+                  <ComplianceAndActivity />
+                </ErrorBoundary>
 
-                {/* 7. Visual CCTV Camera Feeds, Device Sensors & Daily Care Tasks */}
-                <NurseryCameraAndSensors />
+                <ErrorBoundary section="Nursery & Sensors">
+                  <NurseryCameraAndSensors />
+                </ErrorBoundary>
               </>
             ) : (
-              <DedicatedViews />
+              <ErrorBoundary section="View">
+                <DedicatedViews />
+              </ErrorBoundary>
             )}
           </div>
         </main>
@@ -149,51 +166,65 @@ const MainLayout: React.FC = () => {
       {/* Global Spotlight Search Palette (Cmd+K / Ctrl+K) */}
       <SearchPalette isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
 
-      {/* Active Modal Portals */}
-      {activeModal === 'new_sale' && <NewSaleModal />}
-      {activeModal === 'create_po' && <CreatePOModal />}
-      {activeModal === 'record_khata' && <RecordPaymentModal />}
-      {activeModal === 'plant_care' && <PlantCareModal />}
-      {activeModal === 'stock_adjust' && <StockAdjustModal />}
-      {activeModal === 'quick_view_alerts' && <AlertsModal />}
-      {activeModal === 'live_camera' && <LiveCameraModal />}
-      {activeModal === 'add_user' && <AddUserModal />}
-      {activeModal === 'edit_user' && <EditUserModal />}
-      {activeModal === 'remove_user' && <RemoveUserModal />}
-      {activeModal === 'device_sessions' && <DeviceSessionsModal />}
-      {activeModal === 'change_password' && <ChangePasswordModal />}
+      {/* Active Modal Portals — each wrapped in ErrorBoundary */}
+      <ErrorBoundary section="POS Terminal">
+        {activeModal === 'new_sale' && <NewSaleModal />}
+      </ErrorBoundary>
+      {activeModal === 'create_po' && <ErrorBoundary section="Create PO"><CreatePOModal /></ErrorBoundary>}
+      {activeModal === 'record_khata' && <ErrorBoundary section="Record Payment"><RecordPaymentModal /></ErrorBoundary>}
+      {activeModal === 'plant_care' && <ErrorBoundary section="Plant Care"><PlantCareModal /></ErrorBoundary>}
+      {activeModal === 'stock_adjust' && <ErrorBoundary section="Stock Adjustment"><StockAdjustModal /></ErrorBoundary>}
+      {activeModal === 'quick_view_alerts' && <ErrorBoundary section="Alerts"><AlertsModal /></ErrorBoundary>}
+      {activeModal === 'live_camera' && <ErrorBoundary section="Live Camera"><LiveCameraModal /></ErrorBoundary>}
+      {activeModal === 'add_user' && <ErrorBoundary section="Add User"><AddUserModal /></ErrorBoundary>}
+      {activeModal === 'edit_user' && <ErrorBoundary section="Edit User"><EditUserModal /></ErrorBoundary>}
+      {activeModal === 'remove_user' && <ErrorBoundary section="Remove User"><RemoveUserModal /></ErrorBoundary>}
+      {activeModal === 'device_sessions' && <ErrorBoundary section="Device Sessions"><DeviceSessionsModal /></ErrorBoundary>}
+      {activeModal === 'change_password' && <ErrorBoundary section="Change Password"><ChangePasswordModal /></ErrorBoundary>}
       {activeModal === 'hardware_devices' && (
-        <HardwareDeviceModal isOpen={true} onClose={() => setActiveModal('none')} />
+        <ErrorBoundary section="Hardware Devices">
+          <HardwareDeviceModal isOpen={true} onClose={() => setActiveModal('none')} />
+        </ErrorBoundary>
       )}
       {activeModal === 'voice_bill' && (
-        <VoiceBillModal
-          isOpen={true}
-          onClose={() => setActiveModal('none')}
-          onApplyBill={(parsed) => {
-            setVoiceBillData(parsed);
-            setActiveModal('new_sale');
-          }}
-        />
+        <ErrorBoundary section="Voice Billing">
+          <VoiceBillModal
+            isOpen={true}
+            onClose={() => setActiveModal('none')}
+            onApplyBill={(parsed) => {
+              setVoiceBillData(parsed);
+              setActiveModal('new_sale');
+            }}
+          />
+        </ErrorBoundary>
       )}
       {activeModal === 'whatsapp_khata' && selectedCustomerForWhatsApp && (
-        <WhatsAppKhataModal
-          isOpen={true}
-          onClose={() => setActiveModal('none')}
-          customer={selectedCustomerForWhatsApp}
-        />
+        <ErrorBoundary section="WhatsApp Khata">
+          <WhatsAppKhataModal
+            isOpen={true}
+            onClose={() => setActiveModal('none')}
+            customer={selectedCustomerForWhatsApp}
+          />
+        </ErrorBoundary>
       )}
       {activeModal === 'nic_eway_bill' && selectedSaleForEwayBill && (
-        <NicEwayBillModal
-          isOpen={true}
-          onClose={() => setActiveModal('none')}
-          sale={selectedSaleForEwayBill}
-        />
+        <ErrorBoundary section="NIC e-Way Bill">
+          <NicEwayBillModal
+            isOpen={true}
+            onClose={() => setActiveModal('none')}
+            sale={selectedSaleForEwayBill}
+          />
+        </ErrorBoundary>
       )}
 
       {/* Floating Global Toast Notification */}
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-2xl bg-zinc-900 text-white text-xs font-semibold shadow-2xl border border-zinc-700 animate-slide-up">
-          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+        <div
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-2xl bg-zinc-900 text-white text-xs font-semibold shadow-2xl border border-zinc-700 animate-slide-up"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="w-2 h-2 rounded-full bg-emerald-400" aria-hidden="true"></span>
           <span>{toast?.message}</span>
         </div>
       )}
@@ -204,7 +235,10 @@ const MainLayout: React.FC = () => {
 export default function App() {
   return (
     <AppProvider>
-      <MainLayout />
+      {/* UX-02 FIX: Top-level ErrorBoundary catches any error that slips through section boundaries */}
+      <ErrorBoundary section="Application">
+        <MainLayout />
+      </ErrorBoundary>
     </AppProvider>
   );
 }

@@ -1,7 +1,7 @@
 import fs from 'fs';
 
-const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVyaGFic29oc2RwdXNlcGpwbHVwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzY3MDg0OCwiZXhwIjoyMTAzMjQ2ODQ4fQ.VUJYgGs7NCCuUoOKj_UFHK8kGD9Gva9XyLNjWZ6eERc';
-const PROJECT_REF = 'erhabsohsdpusepjplup';
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const PROJECT_REF = process.env.SUPABASE_PROJECT_REF;
 
 async function run() {
   const sql = fs.readFileSync('supabase/custom_jwt_schema.sql', 'utf-8');
