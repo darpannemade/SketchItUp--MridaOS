@@ -47,11 +47,34 @@ export const GSTInvoiceModal: React.FC<GSTInvoiceModalProps> = ({
     is_interstate: (sale as any).is_interstate ?? false,
     line_items: (sale.items || []).map((item, idx) => {
       const taxable = item.qty * item.price;
-      const rate = 18.0;
       const isInter = (sale as any).is_interstate ?? false;
+
+      // INT-02/COMP-01 FIX: Use the item's actual GST rate.
+      // Priority: item.gst_rate field > HSN-based lookup > safe default of 5% (fertilizer)
+      // We do NOT default to 18% — that would generate an illegal invoice for Urea, DAP, etc.
+      const HSN_RATES: Record<string, number> = {
+        '3102': 5,  // Urea
+        '3105': 5,  // DAP, NPK
+        '3104': 5,  // MOP (Potash)
+        '2833': 12, // Zinc Sulfate
+        '3101': 0,  // Organic compost/Neem cake (exempt)
+        '1209': 0,  // Seeds (exempt)
+        '0602': 5,  // Nursery plants
+        '3808': 18, // Pesticides/Fungicides
+        '8201': 18, // Tools
+        '3926': 18, // Plastic items
+      };
+      const hsnCode = (item as any).hsn_code || '3102';
+      const itemGstRate = (item as any).gst_rate !== undefined
+        ? (item as any).gst_rate
+        : (HSN_RATES[hsnCode] ?? 5);
+
+      const isExempt = itemGstRate === 0;
+      const rate = isExempt ? 0 : itemGstRate;
+
       return {
         name: item.name,
-        hsn_code: (item as any).hsn_code || '3102',
+        hsn_code: hsnCode,
         qty: item.qty,
         price: item.price,
         taxable_amount: taxable,
@@ -61,9 +84,10 @@ export const GSTInvoiceModal: React.FC<GSTInvoiceModalProps> = ({
         sgst_amount: isInter ? 0 : Math.round(taxable * (rate / 200) * 100) / 100,
         igst_rate: isInter ? rate : 0,
         igst_amount: isInter ? Math.round(taxable * (rate / 100) * 100) / 100 : 0,
-        total_amount: Math.round(taxable * 1.18 * 100) / 100,
+        total_amount: Math.round(taxable * (1 + rate / 100) * 100) / 100,
       };
     }),
+
     total_taxable_amount: (sale as any).total_taxable_amount || Math.round(sale.total * 0.847 * 100) / 100,
     total_cgst: (sale as any).total_cgst || Math.round(sale.total * 0.076 * 100) / 100,
     total_sgst: (sale as any).total_sgst || Math.round(sale.total * 0.076 * 100) / 100,

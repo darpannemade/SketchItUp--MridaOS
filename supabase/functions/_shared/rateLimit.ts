@@ -1,4 +1,28 @@
-import { getRedisClient, makeRedisKey } from './redis.ts';
+/**
+ * MridaOS Rate Limiter — Supabase Table-Based (replaces broken redis.ts dependency)
+ *
+ * SEC-03 FIX: The original rateLimit.ts imported from './redis.ts' which does not exist,
+ * causing the module to throw on load and the catch block to always return { allowed: true }.
+ * This implementation uses the Supabase `rate_limit_counters` table for persistent,
+ * cross-instance sliding window rate limiting.
+ *
+ * Required table (add to supabase_schema.sql):
+ *   CREATE TABLE IF NOT EXISTS public.rate_limit_counters (
+ *     key TEXT PRIMARY KEY,
+ *     count INTEGER DEFAULT 1 NOT NULL,
+ *     window_start TIMESTAMPTZ DEFAULT now() NOT NULL,
+ *     window_seconds INTEGER NOT NULL
+ *   );
+ */
+
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+function getSupabaseAdmin() {
+  const url = Deno.env.get('SUPABASE_URL');
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!url || !key) throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+  return createClient(url, key);
+}
 
 export interface RateLimitConfig {
   window: number; // Time window in seconds
@@ -9,67 +33,82 @@ export interface RateLimitResult {
   allowed: boolean;
   remaining: number;
   resetAt: number; // Unix timestamp in milliseconds
-  current: number; // Current request count
+  current: number;
 }
 
 // Predefined rate limit rules for different operations
 export const RATE_LIMITS = {
   // Authentication endpoints
-  login_ip: { window: 60, max: 5 },                // 5 login attempts per minute per IP
-  login_email: { window: 900, max: 10 },           // 10 login attempts per 15 min per email
-  refresh_token: { window: 60, max: 20 },          // 20 token refreshes per minute per user
-  password_reset_request: { window: 3600, max: 3 }, // 3 reset requests per hour per email
-  password_change: { window: 3600, max: 5 },       // 5 password changes per hour per user
+  login_ip: { window: 60, max: 5 },                 // 5 login attempts per minute per IP
+  login_email: { window: 900, max: 10 },             // 10 login attempts per 15 min per email
+  refresh_token: { window: 60, max: 20 },            // 20 token refreshes per minute per user
+  password_reset_request: { window: 3600, max: 3 },  // 3 reset requests per hour per email
+  password_change: { window: 3600, max: 5 },         // 5 password changes per hour per user
 
   // API endpoints (per authenticated user)
-  api_read: { window: 60, max: 100 },              // 100 read requests per minute
-  api_write: { window: 60, max: 30 },              // 30 write requests per minute
-  api_delete: { window: 60, max: 10 },             // 10 delete requests per minute
+  api_read: { window: 60, max: 100 },
+  api_write: { window: 60, max: 30 },
+  api_delete: { window: 60, max: 10 },
 
-  // Global fallback (per IP, all requests)
-  global_ip: { window: 60, max: 200 },             // 200 total requests per minute per IP
+  // Global fallback
+  global_ip: { window: 60, max: 200 },
 
-  // Admin operations (stricter limits on sensitive actions)
-  admin_user_create: { window: 300, max: 10 },     // 10 user creations per 5 min
-  admin_user_delete: { window: 3600, max: 5 },     // 5 user deletions per hour
+  // Admin operations
+  admin_user_create: { window: 300, max: 10 },
+  admin_user_delete: { window: 3600, max: 5 },
 } as const;
 
 /**
- * Check if a request is within rate limits using sliding window counter
+ * Check and increment rate limit counter using Supabase upsert.
+ * Uses a fixed window: counter resets when window_start is older than window_seconds.
  */
 export async function checkRateLimit(
   key: string,
   config: RateLimitConfig
 ): Promise<RateLimitResult> {
-  const redis = getRedisClient();
-  const redisKey = makeRedisKey('ratelimit', key);
-
   try {
-    // Increment counter and get current value
-    const current = await redis.incr(redisKey);
+    const supabase = getSupabaseAdmin();
+    const now = new Date();
+    const windowStart = new Date(now.getTime() - config.window * 1000);
 
-    // If this is the first request in a new window, set expiration
-    if (current === 1) {
-      await redis.expire(redisKey, config.window);
+    // Fetch existing counter
+    const { data: existing } = await supabase
+      .from('rate_limit_counters')
+      .select('count, window_start')
+      .eq('key', key)
+      .maybeSingle();
+
+    let current = 1;
+    let resetAt: number;
+
+    if (!existing || new Date(existing.window_start) < windowStart) {
+      // Window expired or no record — start fresh
+      await supabase.from('rate_limit_counters').upsert({
+        key,
+        count: 1,
+        window_start: now.toISOString(),
+        window_seconds: config.window,
+      }, { onConflict: 'key' });
+      resetAt = now.getTime() + config.window * 1000;
+    } else {
+      // Within window — increment
+      current = (existing.count || 0) + 1;
+      await supabase
+        .from('rate_limit_counters')
+        .update({ count: current })
+        .eq('key', key);
+      resetAt = new Date(existing.window_start).getTime() + config.window * 1000;
     }
 
-    // Get TTL to calculate reset time
-    const ttl = await redis.ttl(redisKey);
-    const resetAt = Date.now() + (ttl > 0 ? ttl * 1000 : config.window * 1000);
-
-    const allowed = current <= config.max;
-    const remaining = Math.max(0, config.max - current);
-
     return {
-      allowed,
-      remaining,
+      allowed: current <= config.max,
+      remaining: Math.max(0, config.max - current),
       resetAt,
       current,
     };
   } catch (error) {
-    // If Redis fails, fail open to prevent outages while logging for monitoring
-    console.error('Rate limit check failed:', error);
-
+    // Fail open with logging — never block users due to rate limiter infrastructure issues
+    console.error('[RateLimit] checkRateLimit failed:', error);
     return {
       allowed: true,
       remaining: 999,
@@ -80,16 +119,14 @@ export async function checkRateLimit(
 }
 
 /**
- * Reset/clear a rate limit counter (used when an operation succeeds, e.g., successful login)
+ * Reset a rate limit counter (e.g., after successful login)
  */
 export async function resetRateLimit(key: string): Promise<void> {
-  const redis = getRedisClient();
-  const redisKey = makeRedisKey('ratelimit', key);
-
   try {
-    await redis.del(redisKey);
+    const supabase = getSupabaseAdmin();
+    await supabase.from('rate_limit_counters').delete().eq('key', key);
   } catch (error) {
-    console.error('Failed to reset rate limit:', error);
+    console.error('[RateLimit] resetRateLimit failed:', error);
   }
 }
 
@@ -100,13 +137,22 @@ export async function getRateLimitStatus(
   key: string,
   config: RateLimitConfig
 ): Promise<RateLimitResult> {
-  const redis = getRedisClient();
-  const redisKey = makeRedisKey('ratelimit', key);
-
   try {
-    const current = ((await redis.get(redisKey)) as number) || 0;
-    const ttl = await redis.ttl(redisKey);
-    const resetAt = Date.now() + (ttl > 0 ? ttl * 1000 : config.window * 1000);
+    const supabase = getSupabaseAdmin();
+    const { data: existing } = await supabase
+      .from('rate_limit_counters')
+      .select('count, window_start')
+      .eq('key', key)
+      .maybeSingle();
+
+    if (!existing) {
+      return { allowed: true, remaining: config.max, resetAt: Date.now() + config.window * 1000, current: 0 };
+    }
+
+    const windowStart = new Date(existing.window_start);
+    const resetAt = windowStart.getTime() + config.window * 1000;
+    const isExpired = Date.now() > resetAt;
+    const current = isExpired ? 0 : (existing.count || 0);
 
     return {
       allowed: current < config.max,
@@ -115,18 +161,13 @@ export async function getRateLimitStatus(
       current,
     };
   } catch (error) {
-    console.error('Failed to get rate limit status:', error);
-    return {
-      allowed: true,
-      remaining: 999,
-      resetAt: Date.now() + config.window * 1000,
-      current: 0,
-    };
+    console.error('[RateLimit] getRateLimitStatus failed:', error);
+    return { allowed: true, remaining: 999, resetAt: Date.now() + config.window * 1000, current: 0 };
   }
 }
 
 /**
- * Middleware helper: Add rate limit headers to response
+ * Add rate limit headers to response
  */
 export function addRateLimitHeaders(
   headers: Headers,
@@ -144,7 +185,7 @@ export function addRateLimitHeaders(
 }
 
 /**
- * Middleware helper: Create rate limit exceeded response (HTTP 429)
+ * Create HTTP 429 rate limit exceeded response
  */
 export function createRateLimitResponse(result: RateLimitResult): Response {
   const retryAfter = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));

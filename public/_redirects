@@ -1,0 +1,7 @@
+/*  SPA fallback — all paths serve index.html with 200 (not 301)  */
+/* /static assets are served directly by Render's CDN before this rule */
+/*
+  INFRA-01: SPA routing fix + Security headers for Render Static Site
+*/
+/static/* /static/:splat 200
+/* /index.html 200

@@ -2,7 +2,19 @@
  * Cryptographic JWT signing and verification library using standard Web Crypto API (HMAC-SHA256)
  */
 
-const DEFAULT_JWT_SECRET = 'mridaos-enterprise-secure-jwt-secret-key-2026-sha256-super-secure!';
+// SEC-01 FIX: Secret is now read exclusively from environment variable.
+// Set via: supabase secrets set JWT_SECRET=<256-bit-random-value>
+// Generate: openssl rand -base64 32
+function getJwtSecret(): string {
+  const secret = Deno.env.get('JWT_SECRET');
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      'JWT_SECRET environment variable is not set or is too short (minimum 32 characters). ' +
+      'Set it via: supabase secrets set JWT_SECRET=$(openssl rand -base64 32)'
+    );
+  }
+  return secret;
+}
 
 function base64UrlEncode(str: string): string {
   const bytes = new TextEncoder().encode(str);
@@ -56,7 +68,7 @@ export interface CustomJwtPayload {
  */
 export async function signJwt(
   payload: Omit<CustomJwtPayload, 'iat' | 'exp'>,
-  secret = DEFAULT_JWT_SECRET,
+  secret = getJwtSecret(),
   expiresInSeconds = 900 // 15 minutes
 ): Promise<{ token: string; exp: number; iat: number }> {
   const now = Math.floor(Date.now() / 1000);
@@ -102,7 +114,7 @@ export async function signJwt(
  */
 export async function verifyJwt(
   token: string,
-  secret = DEFAULT_JWT_SECRET
+  secret = getJwtSecret()
 ): Promise<{ isValid: boolean; payload?: CustomJwtPayload; error?: string }> {
   try {
     const parts = token.split('.');

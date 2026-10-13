@@ -460,7 +460,10 @@ serve(async (req: Request) => {
         });
       }
 
-      const resetLink = `http://localhost:3000/reset-password?token=${plainToken}`;
+      // SEC-05 FIX: Use APP_URL env var instead of hardcoded localhost
+      const appUrl = Deno.env.get('APP_URL') || 'https://sketchitup-mridaos.onrender.com';
+      const resetLink = `${appUrl}/reset-password?token=${plainToken}`;
+
 
       return successResponse({
         message: 'If the email exists in our system, a password reset link has been dispatched.',
@@ -561,7 +564,10 @@ serve(async (req: Request) => {
         createdAt: now,
       });
 
-      const resetLink = `http://localhost:3000/reset-password?token=${plainToken}`;
+      // SEC-05 FIX: Use APP_URL env var instead of hardcoded localhost
+      const appUrl2 = Deno.env.get('APP_URL') || 'https://sketchitup-mridaos.onrender.com';
+      const resetLink = `${appUrl2}/reset-password?token=${plainToken}`;
+
 
       return successResponse({
         token: plainToken,
