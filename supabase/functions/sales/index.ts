@@ -199,6 +199,48 @@ serve(async (req: Request) => {
         );
       }
 
+      // COMP-03 FIX: Server-side DBT 50-bag monthly subsidy cap enforcement
+      const SUBSIDISED_KEYWORDS = ['urea', 'dap', 'npk', 'mop', 'potash'];
+      const requestedSubsidisedBags = body.items.reduce((acc, item) => {
+        const isSubsidised = (item as any).is_subsidised || SUBSIDISED_KEYWORDS.some((kw) => item.name.toLowerCase().includes(kw));
+        return isSubsidised ? acc + item.qty : acc;
+      }, 0);
+
+      if (requestedSubsidisedBags > 0 && body.customer_phone) {
+        // Find first day of current calendar month
+        const nowObj = new Date();
+        const firstDayOfMonth = new Date(nowObj.getFullYear(), nowObj.getMonth(), 1).toISOString().split('T')[0];
+
+        const { data: monthSales, error: monthSalesErr } = await client
+          .from('sales')
+          .select('items, date')
+          .eq('customer_phone', body.customer_phone)
+          .gte('date', firstDayOfMonth);
+
+        if (!monthSalesErr && monthSales) {
+          let alreadyPurchasedBags = 0;
+          for (const s of monthSales) {
+            if (Array.isArray(s.items)) {
+              for (const itm of s.items) {
+                const isSubsidised = itm.is_subsidised || SUBSIDISED_KEYWORDS.some((kw) => (itm.name || '').toLowerCase().includes(kw));
+                if (isSubsidised) {
+                  alreadyPurchasedBags += Number(itm.qty) || 0;
+                }
+              }
+            }
+          }
+
+          if (alreadyPurchasedBags + requestedSubsidisedBags > 50) {
+            return errorResponse(
+              'DBT_MONTHLY_CAP_EXCEEDED',
+              `DBT Statutory Cap Exceeded: Government DBT regulations restrict farmers to 50 bags of subsidised fertilizer per month. Farmer (${body.customer_name || body.customer_phone}) has already purchased ${alreadyPurchasedBags} bags this month. Attempting to purchase ${requestedSubsidisedBags} additional bags exceeds the monthly limit of 50 bags.`,
+              400,
+              { alreadyPurchasedBags, requestedSubsidisedBags, maxAllowedBags: 50, remainingAllowance: Math.max(0, 50 - alreadyPurchasedBags) }
+            );
+          }
+        }
+      }
+
       // Generate Sequential GST Invoice Number
       invoiceSequenceCounter += 1;
       const nextSeq = String(invoiceSequenceCounter).padStart(5, '0');

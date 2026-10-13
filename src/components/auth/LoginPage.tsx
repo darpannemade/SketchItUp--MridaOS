@@ -226,6 +226,8 @@ export const LoginPage: React.FC = () => {
             {displayError && (
               <div
                 id="login-error-alert"
+                role="alert"
+                aria-live="assertive"
                 className={`mb-4 p-3.5 rounded-2xl flex items-start gap-2.5 text-xs animate-in fade-in slide-in-from-top-1 duration-200 ${
                   displayError.toLowerCase().includes('lock')
                     ? 'bg-[#FEF3F2] border-2 border-[#FDA29B] text-[#912018]'
@@ -233,9 +235,9 @@ export const LoginPage: React.FC = () => {
                 }`}
               >
                 {displayError.toLowerCase().includes('lock') ? (
-                  <Lock className="w-4 h-4 mt-0.5 flex-shrink-0 text-[#D92D20]" />
+                  <Lock className="w-4 h-4 mt-0.5 flex-shrink-0 text-[#D92D20]" aria-hidden="true" />
                 ) : (
-                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-[#D92D20]" />
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0 text-[#D92D20]" aria-hidden="true" />
                 )}
                 <div className="flex-1">
                   {displayError.toLowerCase().includes('lock') && (
@@ -247,18 +249,22 @@ export const LoginPage: React.FC = () => {
             )}
 
             {/* Login Form */}
-            <form onSubmit={handleLogin} className="space-y-4">
+            <form onSubmit={handleLogin} className="space-y-4" aria-label="Staff login form">
               <div>
-                <label className="block text-xs font-bold text-[#1A1A1A] mb-1.5">
+                <label htmlFor="login-email" className="block text-xs font-bold text-[#1A1A1A] mb-1.5">
                   Work Email Address
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#788880]">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#788880]" aria-hidden="true">
                     <Mail className="w-4 h-4" />
                   </div>
                   <input
+                    id="login-email"
                     type="email"
                     required
+                    aria-required="true"
+                    aria-label="Work Email Address"
+                    aria-describedby={displayError ? 'login-error-alert' : undefined}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="e.g. staff@mridaos.in"
@@ -269,7 +275,7 @@ export const LoginPage: React.FC = () => {
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-bold text-[#1A1A1A]">
+                  <label htmlFor="login-password" className="block text-xs font-bold text-[#1A1A1A]">
                     Password
                   </label>
                   <button
@@ -281,12 +287,16 @@ export const LoginPage: React.FC = () => {
                   </button>
                 </div>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#788880]">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#788880]" aria-hidden="true">
                     <Lock className="w-4 h-4" />
                   </div>
                   <input
+                    id="login-password"
                     type={showPassword ? 'text' : 'password'}
                     required
+                    aria-required="true"
+                    aria-label="Password"
+                    aria-describedby={displayError ? 'login-error-alert' : undefined}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••••••"
@@ -295,6 +305,7 @@ export const LoginPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
                     className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#788880] hover:text-[#1A1A1A]"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -305,14 +316,15 @@ export const LoginPage: React.FC = () => {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-3 px-4 bg-[#079455] hover:bg-[#067A46] active:scale-[0.99] text-white text-xs sm:text-sm font-bold rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                aria-busy={isLoading}
+                className="w-full py-3 px-4 bg-[#079455] hover:bg-[#067A46] active:scale-[0.99] text-white text-xs sm:text-sm font-bold rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
               >
                 {isLoading ? (
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" aria-label="Logging in..."></div>
                 ) : (
                   <>
                     <span>Log In to Terminal</span>
-                    <ArrowRight className="w-4 h-4" />
+                    <ArrowRight className="w-4 h-4" aria-hidden="true" />
                   </>
                 )}
               </button>

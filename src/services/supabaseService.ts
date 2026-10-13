@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import * as api from '../lib/api';
+import { offlineSyncService } from './offlineSyncService';
 import {
   Branch,
   InventoryItem,
@@ -778,7 +779,7 @@ export const fetchInventory = async (): Promise<InventoryItem[]> => {
   try {
     const { data, error } = await supabase.from('inventory').select('*').order('created_at', { ascending: false });
     if (!error && data && data.length > 0) {
-      return data.map((row: any) => ({
+      const dbInventory = data.map((row: any) => ({
         id: row.id,
         name: row.name,
         category: row.category,
@@ -798,21 +799,26 @@ export const fetchInventory = async (): Promise<InventoryItem[]> => {
         isShelfLifeSensitive: Boolean(row.is_shelf_life_sensitive),
         batches: Array.isArray(row.batches) ? row.batches : [],
       }));
-    }
-  } catch {}
 
+      // Cache for offline read resilience
+      try {
+        localStorage.setItem('mridaos_custom_inventory', JSON.stringify(dbInventory));
+      } catch {}
+
+      return dbInventory;
+    }
+  } catch (err) {
+    console.warn('[INT-01] fetchInventory network error, falling back to cached state:', err);
+  }
+
+  // Only fall back to cache when Supabase is completely unreachable
   return getStoredInventory();
 };
 
 export const insertInventoryItem = async (item: InventoryItem): Promise<void> => {
+  // INT-01 FIX: Write to Supabase first. If offline/failed, queue in offlineSyncService.
   try {
-    const current = getStoredInventory().filter((i) => i.id !== item.id);
-    current.unshift(item);
-    localStorage.setItem('mridaos_custom_inventory', JSON.stringify(current));
-  } catch {}
-
-  try {
-    await supabase.from('inventory').insert({
+    const { error } = await supabase.from('inventory').insert({
       id: item.id,
       name: item.name,
       category: item.category,
@@ -829,9 +835,22 @@ export const insertInventoryItem = async (item: InventoryItem): Promise<void> =>
       supplier_name: item.supplierName,
       batches: item.batches,
     });
+
+    if (error) {
+      console.warn('[INT-01] Supabase inventory insert failed, queueing offline:', error.message);
+      offlineSyncService.queueAction('stock_adjust', item);
+    }
   } catch (err) {
-    console.warn('Inventory insert fallback:', err);
+    console.warn('[INT-01] Network error during inventory insert, queueing offline:', err);
+    offlineSyncService.queueAction('stock_adjust', item);
   }
+
+  // Update local cache
+  try {
+    const current = getStoredInventory().filter((i) => i.id !== item.id);
+    current.unshift(item);
+    localStorage.setItem('mridaos_custom_inventory', JSON.stringify(current));
+  } catch {}
 };
 
 export const updateInventoryItem = async (id: string, updates: Partial<InventoryItem>): Promise<void> => {
@@ -978,11 +997,10 @@ function getStoredCustomSales(): SaleRecord[] {
 }
 
 export const fetchSales = async (): Promise<SaleRecord[]> => {
-  let dbSales: SaleRecord[] = [];
   try {
     const { data, error } = await supabase.from('sales').select('*').order('created_at', { ascending: false });
     if (!error && data && data.length > 0) {
-      dbSales = data.map((row: any) => ({
+      const dbSales = data.map((row: any) => ({
         id: row.id,
         invoiceNo: row.invoice_no || row.invoiceNo || `INV-${row.id}`,
         customerName: row.customer_name || row.customerName || 'Customer',
@@ -996,28 +1014,27 @@ export const fetchSales = async (): Promise<SaleRecord[]> => {
         timestamp: row.timestamp || 'Just now',
         paymentMode: row.payment_mode || row.paymentMode || 'cash',
       }));
+
+      // Cache for offline resilience
+      try {
+        localStorage.setItem('mridaos_custom_sales', JSON.stringify(dbSales.slice(0, 100)));
+      } catch {}
+
+      return dbSales;
     }
-  } catch {}
+  } catch (err) {
+    console.warn('[INT-01] fetchSales network error, falling back to cache:', err);
+  }
 
-  const customSales = getStoredCustomSales();
-  const salesMap = new Map<string, SaleRecord>();
-
-  DEFAULT_SALES.forEach((s) => salesMap.set(s.id, s));
-  customSales.forEach((s) => salesMap.set(s.id, s));
-  dbSales.forEach((s) => salesMap.set(s.id, s));
-
-  return Array.from(salesMap.values()).reverse();
+  // Fallback to cache only when Supabase is completely unreachable
+  const cached = getStoredCustomSales();
+  return cached.length > 0 ? cached : DEFAULT_SALES;
 };
 
 export const insertSale = async (sale: SaleRecord): Promise<void> => {
+  // INT-01 FIX: Supabase is the primary source of truth. Write to Supabase first.
   try {
-    const customSales = getStoredCustomSales();
-    customSales.unshift(sale);
-    localStorage.setItem('mridaos_custom_sales', JSON.stringify(customSales.slice(0, 100)));
-  } catch {}
-
-  try {
-    await supabase.from('sales').insert({
+    const { error } = await supabase.from('sales').insert({
       id: sale.id,
       invoice_no: sale.invoiceNo,
       customer_name: sale.customerName,
@@ -1031,9 +1048,22 @@ export const insertSale = async (sale: SaleRecord): Promise<void> => {
       timestamp: sale.timestamp,
       payment_mode: sale.paymentMode,
     });
+
+    if (error) {
+      console.warn('[INT-01] Supabase sale insert failed, queueing for offline sync:', error.message);
+      offlineSyncService.queueAction('sale', sale);
+    }
   } catch (err) {
-    console.warn('Sale insert fallback:', err);
+    console.warn('[INT-01] Network error during sale insert, queueing for offline sync:', err);
+    offlineSyncService.queueAction('sale', sale);
   }
+
+  // Update local cache
+  try {
+    const customSales = getStoredCustomSales();
+    const updated = [sale, ...customSales.filter((s) => s.id !== sale.id)].slice(0, 100);
+    localStorage.setItem('mridaos_custom_sales', JSON.stringify(updated));
+  } catch {}
 };
 
 // ==============================================================================
