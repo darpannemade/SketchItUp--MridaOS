@@ -378,16 +378,21 @@ export const NewSaleModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sale-modal-title"
+    >
       <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border border-[#E2EAE5] overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
         <div className="p-4 sm:p-5 bg-[#F9FBF9] border-b border-[#E5ECE7] flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-2xl bg-[#079455] text-white flex items-center justify-center shadow-2xs">
+            <div className="w-9 h-9 rounded-2xl bg-[#079455] text-white flex items-center justify-center shadow-2xs" aria-hidden="true">
               <ShoppingBag className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-[#1A1A1A]">
+              <h3 id="sale-modal-title" className="text-base font-bold text-[#1A1A1A]">
                 Counter Billing, FEFO Allocation & PoS/DBT Subsidy Terminal
               </h3>
               <p className="text-xs text-[#6E7B74]">
@@ -402,16 +407,18 @@ export const NewSaleModal: React.FC = () => {
               onClick={() => setActiveModal('voice_bill')}
               className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-[#079455] border border-emerald-200 dark:border-emerald-800 text-xs font-bold flex items-center gap-1.5 hover:bg-emerald-100 transition-colors"
               title="Voice Assisted PoS (Marathi, Hindi, English)"
+              aria-label="Voice Assisted PoS (Marathi, Hindi, English)"
             >
-              <Mic className="w-3.5 h-3.5" />
+              <Mic className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Voice POS</span>
             </button>
 
             <button
               onClick={() => setActiveModal('none')}
+              aria-label="Close billing modal"
               className="p-2 rounded-xl text-[#788880] hover:text-[#1A1A1A] hover:bg-[#EFF5F1] transition-colors cursor-pointer"
             >
-              <X className="w-5 h-5" />
+              <X className="w-5 h-5" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -564,8 +571,12 @@ export const NewSaleModal: React.FC = () => {
         ) : (
           <form onSubmit={handleSubmitSale} className="p-4 sm:p-5 overflow-y-auto flex flex-col gap-4 text-xs">
             {validationError && (
-              <div className="p-3.5 rounded-2xl bg-[#FEF3F2] border border-[#FECDCA] text-[#B42318] flex items-start gap-2.5">
-                <ShieldAlert className="w-4 h-4 text-[#D92D20] shrink-0 mt-0.5" />
+              <div
+                role="alert"
+                aria-live="assertive"
+                className="p-3.5 rounded-2xl bg-[#FEF3F2] border border-[#FECDCA] text-[#B42318] flex items-start gap-2.5"
+              >
+                <ShieldAlert className="w-4 h-4 text-[#D92D20] shrink-0 mt-0.5" aria-hidden="true" />
                 <div className="font-semibold leading-relaxed">{validationError}</div>
               </div>
             )}

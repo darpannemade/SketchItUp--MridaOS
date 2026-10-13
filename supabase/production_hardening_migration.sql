@@ -118,6 +118,30 @@ END $$;
 
 
 -- ────────────────────────────────────────────────────────────────────────────
+-- INT-03: Auto-update Khata ledger balance on credit sales
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.handle_khata_sale_balance()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.is_khata = TRUE AND NEW.khata_amount > 0 THEN
+    UPDATE public.khata_ledger
+    SET 
+      outstanding_balance = outstanding_balance + NEW.khata_amount,
+      total_purchased = total_purchased + NEW.total
+    WHERE phone = NEW.customer_phone OR name = NEW.customer_name;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_khata_sale_balance ON public.sales;
+CREATE TRIGGER trg_khata_sale_balance
+  AFTER INSERT ON public.sales
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_khata_sale_balance();
+
+
+-- ────────────────────────────────────────────────────────────────────────────
 -- Confirm all indexes created
 -- ────────────────────────────────────────────────────────────────────────────
 SELECT indexname, tablename
@@ -125,3 +149,4 @@ FROM pg_indexes
 WHERE schemaname = 'public'
   AND indexname LIKE 'idx_%'
 ORDER BY tablename, indexname;
+

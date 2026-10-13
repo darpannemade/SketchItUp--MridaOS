@@ -11,14 +11,15 @@ export interface LockoutStatus {
   remainingAttempts: number;
 }
 
-// In-memory lockout store for fast Edge evaluation and fallback
-const inMemoryLockoutStore = new Map<
+// In-memory fallback ONLY when database connection is down
+const inMemoryFallbackStore = new Map<
   string,
   { failedCount: number; lockedUntil: number | null; lastFailedAt: number }
 >();
 
 /**
- * Check if an account is currently locked
+ * AUTH-04 FIX: Database is the single source of truth across all Edge Function instances.
+ * In-memory store is strictly a temporary fallback if the database cannot be reached.
  */
 export async function checkAccountLockout(
   supabase: SupabaseClient,
@@ -27,15 +28,15 @@ export async function checkAccountLockout(
   const normEmail = email.toLowerCase().trim();
   const now = new Date();
 
-  // 1. Try DB lookup first
+  // 1. Primary: Database check
   try {
-    const { data: user } = await supabase
+    const { data: user, error } = await supabase
       .from('user_accounts')
       .select('failed_login_count, locked_until, last_failed_login_at')
       .eq('email', normEmail)
-      .single();
+      .maybeSingle();
 
-    if (user) {
+    if (!error && user) {
       const lockedUntil = user.locked_until ? new Date(user.locked_until) : null;
       const isLocked = lockedUntil !== null && lockedUntil > now;
 
@@ -59,11 +60,11 @@ export async function checkAccountLockout(
       };
     }
   } catch (err) {
-    console.warn('DB lockout check fallback to in-memory store:', err);
+    console.warn('[AUTH-04] DB lockout check unavailable, using fallback:', err);
   }
 
-  // 2. Fallback to in-memory lockout tracker
-  const memRecord = inMemoryLockoutStore.get(normEmail);
+  // 2. Secondary fallback
+  const memRecord = inMemoryFallbackStore.get(normEmail);
   if (memRecord) {
     const isLocked = memRecord.lockedUntil !== null && memRecord.lockedUntil > now.getTime();
     return {
@@ -83,7 +84,7 @@ export async function checkAccountLockout(
 }
 
 /**
- * Record a failed login attempt and apply lockout if threshold reached
+ * AUTH-04 FIX: Record failed login directly to database as primary store.
  */
 export async function recordFailedLogin(
   supabase: SupabaseClient,
@@ -92,8 +93,51 @@ export async function recordFailedLogin(
   const normEmail = email.toLowerCase().trim();
   const now = new Date();
 
-  // In-memory record update
-  let mem = inMemoryLockoutStore.get(normEmail) || {
+  // 1. Primary: Update in database
+  try {
+    const { data: user } = await supabase
+      .from('user_accounts')
+      .select('id, failed_login_count, last_failed_login_at')
+      .eq('email', normEmail)
+      .maybeSingle();
+
+    if (user) {
+      let failedCount = (user.failed_login_count || 0);
+      const lastFailed = user.last_failed_login_at ? new Date(user.last_failed_login_at) : null;
+
+      if (lastFailed && (now.getTime() - lastFailed.getTime()) > (LOCKOUT_RESET_HOURS * 3600 * 1000)) {
+        failedCount = 1;
+      } else {
+        failedCount += 1;
+      }
+
+      const shouldLock = failedCount >= LOCKOUT_THRESHOLD;
+      const lockedUntil = shouldLock
+        ? new Date(now.getTime() + LOCKOUT_DURATION_MINUTES * 60 * 1000)
+        : null;
+
+      await supabase
+        .from('user_accounts')
+        .update({
+          failed_login_count: failedCount,
+          locked_until: lockedUntil ? lockedUntil.toISOString() : null,
+          last_failed_login_at: now.toISOString(),
+        })
+        .eq('id', user.id);
+
+      return {
+        isLocked: shouldLock,
+        lockedUntil,
+        failedAttempts: failedCount,
+        remainingAttempts: Math.max(0, LOCKOUT_THRESHOLD - failedCount),
+      };
+    }
+  } catch (err) {
+    console.warn('[AUTH-04] Failed to record login in DB, using fallback:', err);
+  }
+
+  // 2. Fallback memory tracking if DB is down
+  let mem = inMemoryFallbackStore.get(normEmail) || {
     failedCount: 0,
     lockedUntil: null,
     lastFailedAt: now.getTime(),
@@ -113,29 +157,7 @@ export async function recordFailedLogin(
     : null;
 
   mem.lockedUntil = lockedUntil ? lockedUntil.getTime() : null;
-  inMemoryLockoutStore.set(normEmail, mem);
-
-  // Sync to database if available
-  try {
-    const { data: user } = await supabase
-      .from('user_accounts')
-      .select('id')
-      .eq('email', normEmail)
-      .single();
-
-    if (user) {
-      await supabase
-        .from('user_accounts')
-        .update({
-          failed_login_count: mem.failedCount,
-          locked_until: lockedUntil?.toISOString() || null,
-          last_failed_login_at: now.toISOString(),
-        })
-        .eq('id', user.id);
-    }
-  } catch (err) {
-    console.warn('DB record failed login fallback:', err);
-  }
+  inMemoryFallbackStore.set(normEmail, mem);
 
   return {
     isLocked: shouldLock,
@@ -152,7 +174,8 @@ export async function resetLockout(
   supabase: SupabaseClient,
   userIdOrEmail: string
 ): Promise<void> {
-  inMemoryLockoutStore.delete(userIdOrEmail.toLowerCase().trim());
+  const norm = userIdOrEmail.toLowerCase().trim();
+  inMemoryFallbackStore.delete(norm);
 
   try {
     await supabase
@@ -162,9 +185,9 @@ export async function resetLockout(
         locked_until: null,
         last_failed_login_at: null,
       })
-      .or(`id.eq.${userIdOrEmail},email.eq.${userIdOrEmail.toLowerCase().trim()}`);
+      .or(`id.eq.${userIdOrEmail},email.eq.${norm}`);
   } catch (err) {
-    console.warn('DB reset lockout warning:', err);
+    console.warn('[AUTH-04] DB reset lockout warning:', err);
   }
 }
 
@@ -175,7 +198,8 @@ export async function unlockAccount(
   supabase: SupabaseClient,
   userIdOrEmail: string
 ): Promise<void> {
-  inMemoryLockoutStore.delete(userIdOrEmail.toLowerCase().trim());
+  const norm = userIdOrEmail.toLowerCase().trim();
+  inMemoryFallbackStore.delete(norm);
 
   try {
     await supabase
@@ -184,8 +208,8 @@ export async function unlockAccount(
         failed_login_count: 0,
         locked_until: null,
       })
-      .or(`id.eq.${userIdOrEmail},email.eq.${userIdOrEmail.toLowerCase().trim()}`);
+      .or(`id.eq.${userIdOrEmail},email.eq.${norm}`);
   } catch (err) {
-    console.warn('DB unlock account warning:', err);
+    console.warn('[AUTH-04] DB unlock account warning:', err);
   }
 }
