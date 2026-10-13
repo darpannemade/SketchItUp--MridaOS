@@ -1,11 +1,44 @@
 -- ==============================================================================
--- MridaOS Production Hardening Migration
+-- MridaOS Production Hardening Migration (Safe & Idempotent)
 -- DB-01: Add critical indexes for query performance
 -- DB-02: Add stock_qty >= 0 constraint to prevent negative inventory
 -- SEC-03: Add rate_limit_counters table for Supabase-based rate limiting
+-- INT-03: Add automatic balance tracking for Khata credit sales
 --
 -- Run this in Supabase Dashboard → SQL Editor
 -- ==============================================================================
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 0. Ensure multi-tenant branch columns exist across all core tables
+-- ────────────────────────────────────────────────────────────────────────────
+ALTER TABLE IF EXISTS public.sales 
+  ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'nashik-central';
+
+ALTER TABLE IF EXISTS public.inventory 
+  ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'nashik-central';
+
+ALTER TABLE IF EXISTS public.khata_ledger 
+  ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'nashik-central';
+
+ALTER TABLE IF EXISTS public.activity_logs 
+  ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'nashik-central';
+
+ALTER TABLE IF EXISTS public.purchase_orders 
+  ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'nashik-central';
+
+ALTER TABLE IF EXISTS public.compliance_licenses 
+  ADD COLUMN IF NOT EXISTS branch_id TEXT DEFAULT 'nashik-central';
+
+-- Ensure public.customers table exists (linked to Khata/farmer registry)
+CREATE TABLE IF NOT EXISTS public.customers (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  name TEXT NOT NULL,
+  phone TEXT,
+  branch_id TEXT DEFAULT 'nashik-central',
+  village TEXT,
+  gstin TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- SEC-03: Rate limit counters table (replaces Redis dependency)
@@ -19,20 +52,16 @@ CREATE TABLE IF NOT EXISTS public.rate_limit_counters (
 
 -- Only service_role can modify rate limit counters
 ALTER TABLE public.rate_limit_counters ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Service role only" ON public.rate_limit_counters;
 CREATE POLICY "Service role only" ON public.rate_limit_counters
   USING (auth.role() = 'service_role');
 
--- Auto-cleanup expired counters older than 1 hour (optional, keeps table lean)
--- You can run this periodically via pg_cron or a scheduled edge function
--- DELETE FROM public.rate_limit_counters
---   WHERE window_start < now() - interval '1 hour';
-
 
 -- ────────────────────────────────────────────────────────────────────────────
--- DB-01: Performance Indexes (zero indexes existed before this migration)
+-- DB-01: Performance Indexes
 -- ────────────────────────────────────────────────────────────────────────────
 
--- Sales table — most frequent queries are by branch + date
+-- Sales table — queries by branch + date
 CREATE INDEX IF NOT EXISTS idx_sales_branch_date
   ON public.sales(branch_id, date DESC);
 
@@ -62,8 +91,18 @@ CREATE INDEX IF NOT EXISTS idx_inventory_stock_qty
 CREATE INDEX IF NOT EXISTS idx_khata_branch
   ON public.khata_ledger(branch_id, outstanding_balance DESC);
 
+CREATE INDEX IF NOT EXISTS idx_khata_phone
+  ON public.khata_ledger(phone);
+
 CREATE INDEX IF NOT EXISTS idx_khata_status
   ON public.khata_ledger(status) WHERE status IN ('due_soon', 'overdue', 'blocked');
+
+-- Customers table — phone lookups
+CREATE INDEX IF NOT EXISTS idx_customers_phone
+  ON public.customers(phone);
+
+CREATE INDEX IF NOT EXISTS idx_customers_branch
+  ON public.customers(branch_id);
 
 -- Activity logs — recency queries for dashboard feed
 CREATE INDEX IF NOT EXISTS idx_activity_branch_time
@@ -76,13 +115,6 @@ CREATE INDEX IF NOT EXISTS idx_po_branch_status
 CREATE INDEX IF NOT EXISTS idx_po_order_date
   ON public.purchase_orders(order_date DESC);
 
--- Customers — phone lookups for billing terminal search
-CREATE INDEX IF NOT EXISTS idx_customers_phone
-  ON public.customers(phone);
-
-CREATE INDEX IF NOT EXISTS idx_customers_branch
-  ON public.customers(branch_id);
-
 -- Compliance — expiry alert queries
 CREATE INDEX IF NOT EXISTS idx_compliance_expiry
   ON public.compliance_licenses(expiry_date ASC) WHERE status != 'expired';
@@ -94,7 +126,6 @@ CREATE INDEX IF NOT EXISTS idx_compliance_expiry
 -- ────────────────────────────────────────────────────────────────────────────
 DO $$
 BEGIN
-  -- Only add constraint if it doesn't already exist
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_stock_non_negative'
@@ -108,16 +139,6 @@ END $$;
 
 
 -- ────────────────────────────────────────────────────────────────────────────
--- DB-04 (partial): Add ON DELETE RESTRICT to sales.branch_id if not present
--- Prevents orphaned sales records if a branch is deleted
--- ────────────────────────────────────────────────────────────────────────────
--- Note: If your FK was created without ON DELETE RESTRICT, you need to
--- recreate it. Check first with:
---   SELECT conname, confdeltype FROM pg_constraint WHERE conname LIKE '%branch%';
--- If confdeltype = 'a' (NO ACTION) it already restricts. No action needed.
-
-
--- ────────────────────────────────────────────────────────────────────────────
 -- INT-03: Auto-update Khata ledger balance on credit sales
 -- ────────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.handle_khata_sale_balance()
@@ -128,7 +149,8 @@ BEGIN
     SET 
       outstanding_balance = outstanding_balance + NEW.khata_amount,
       total_purchased = total_purchased + NEW.total
-    WHERE phone = NEW.customer_phone OR name = NEW.customer_name;
+    WHERE (NEW.customer_phone IS NOT NULL AND phone = NEW.customer_phone)
+       OR name = NEW.customer_name;
   END IF;
   RETURN NEW;
 END;
@@ -149,4 +171,3 @@ FROM pg_indexes
 WHERE schemaname = 'public'
   AND indexname LIKE 'idx_%'
 ORDER BY tablename, indexname;
-

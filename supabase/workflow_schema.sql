@@ -104,7 +104,37 @@ EXCEPTION
   WHEN duplicate_object THEN null;
 END $$;
 
--- 2. Add Status Columns If Not Exists
+-- 2. Ensure Dependent Tables Exist (Suppliers & Batches)
+CREATE TABLE IF NOT EXISTS public.suppliers (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  name TEXT NOT NULL,
+  phone TEXT,
+  email TEXT,
+  gstin TEXT,
+  address TEXT,
+  category TEXT DEFAULT 'fertilizer',
+  rating NUMERIC DEFAULT 4.5,
+  payment_terms TEXT DEFAULT '30 Days Net',
+  status TEXT DEFAULT 'approved',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.batches (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  item_id TEXT,
+  batch_number TEXT NOT NULL,
+  mfg_date DATE,
+  expiry_date DATE,
+  initial_qty NUMERIC DEFAULT 0,
+  available_qty NUMERIC DEFAULT 0,
+  mrp NUMERIC DEFAULT 0,
+  purchase_rate NUMERIC DEFAULT 0,
+  rack TEXT,
+  status TEXT DEFAULT 'active',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Ensure Status Columns Exist
 ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft';
 ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft';
 ALTER TABLE batches ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
