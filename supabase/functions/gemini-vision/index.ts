@@ -111,7 +111,7 @@ serve(async (req: Request) => {
   }
 
   try {
-    // Call Gemini Vision API
+    // Call Gemini Vision API (prefer gemini-1.5-flash with JSON mode)
     const geminiResponse = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       {
@@ -122,8 +122,8 @@ serve(async (req: Request) => {
             {
               parts: [
                 {
-                  inline_data: {
-                    mime_type: mimeType,
+                  inlineData: {
+                    mimeType: mimeType,
                     data: imageBase64,
                   },
                 },
@@ -136,6 +136,7 @@ serve(async (req: Request) => {
           generationConfig: {
             temperature: 0.2,      // Low temp = consistent, factual output
             maxOutputTokens: 1024,
+            responseMimeType: 'application/json',
           },
         }),
       }
